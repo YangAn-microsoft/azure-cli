@@ -12,14 +12,21 @@ from .validate import ValidatedEdit
 
 
 def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    result = subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
         capture_output=True,
         text=True,
-        check=check,
+        check=False,
         encoding="utf-8",
     )
+    if check and result.returncode != 0:
+        # Surface stderr in the exception message so CI logs show the real cause.
+        raise subprocess.CalledProcessError(
+            result.returncode, cmd, output=result.stdout,
+            stderr=(result.stderr or "") + f"\n[cmd: {' '.join(cmd)}]",
+        )
+    return result
 
 
 def branch_exists_remote(repo: str, branch: str) -> bool:
@@ -97,7 +104,8 @@ def commit_all(repo_root: Path, message: str) -> None:
 
 
 def push_branch(repo_root: Path, branch: str) -> None:
-    run(["git", "push", "-u", "origin", branch], cwd=repo_root)
+    # Force-with-lease: agent owns this branch; safe to overwrite on retries.
+    run(["git", "push", "--force-with-lease", "-u", "origin", branch], cwd=repo_root)
 
 
 def open_draft_pr(

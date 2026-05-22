@@ -357,4 +357,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import subprocess as _sp
+    import sys as _sys
+    try:
+        raise SystemExit(main())
+    except _sp.CalledProcessError as e:
+        # Make stderr from gh/git failures visible in CI logs.
+        _sys.stderr.write(
+            f"\nagent: subprocess failed (exit {e.returncode}):\n"
+            f"  cmd: {e.cmd}\n"
+            f"  stdout: {e.stdout or '<empty>'}\n"
+            f"  stderr: {e.stderr or '<empty>'}\n"
+        )
+        raise SystemExit(e.returncode)
