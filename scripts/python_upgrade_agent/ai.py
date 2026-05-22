@@ -195,9 +195,16 @@ def call_model(
     token: str | None = None,
 ) -> str:
     """POST to GitHub Models chat completions and return the assistant text."""
-    token = token or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    # Prefer MODELS_TOKEN (dedicated, must have models:read) over GH_TOKEN.
+    # GH_TOKEN may be a GitHub App installation token that lacks models:read.
+    token = (
+        token
+        or os.environ.get("MODELS_TOKEN")
+        or os.environ.get("GH_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+    )
     if not token:
-        raise RuntimeError("GH_TOKEN / GITHUB_TOKEN not set")
+        raise RuntimeError("MODELS_TOKEN / GH_TOKEN / GITHUB_TOKEN not set")
     body = json.dumps({
         "model": model,
         "temperature": 0,

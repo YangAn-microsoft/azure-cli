@@ -38,8 +38,9 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  # All write operations go through the App token. The default GITHUB_TOKEN
+  # only needs models:read for the LLM call.
+  contents: read
   models: read
 
 jobs:
@@ -57,16 +58,27 @@ jobs:
             exit 0
           fi
 
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: dev
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Configure git identity
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Identity matches the App so commits/PRs attribute to it.
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -75,7 +87,10 @@ jobs:
 
       - name: Run agent
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # App token: contents+pull-requests write; used by git push & gh pr create.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Default workflow token: has models:read for the LLM call.
+          MODELS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           AGENT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
