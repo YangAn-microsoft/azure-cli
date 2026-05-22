@@ -85,7 +85,10 @@ def git_grep(current_minor: str, repo_root: Path | None = None) -> list[Candidat
             f"git grep failed (rc={result.returncode}): {result.stderr.strip()}"
         )
 
-    # Group matches per file, then attach ±3 lines of context.
+    # Group matches per file, then attach ±2 lines of context.
+    # ±2 (not ±3) keeps the prompt small while still showing the immediate
+    # surroundings — enough to disambiguate setup.py classifiers, YAML matrix
+    # entries, and CI displayName/inputs pairs.
     per_file_lines: dict[str, list[tuple[int, str]]] = {}
     for raw in result.stdout.splitlines():
         # Format: path:line:content  (path may contain ':' on Windows? git uses forward slashes)
@@ -106,8 +109,8 @@ def git_grep(current_minor: str, repo_root: Path | None = None) -> list[Candidat
         file_lines = (root / path).read_text(encoding="utf-8", errors="replace").splitlines()
         for lineno, content in hits:
             i = lineno - 1
-            before = file_lines[max(0, i - 3): i]
-            after = file_lines[i + 1: i + 4]
+            before = file_lines[max(0, i - 2): i]
+            after = file_lines[i + 1: i + 3]
             candidates.append(Candidate(
                 path=path,
                 line_number=lineno,
