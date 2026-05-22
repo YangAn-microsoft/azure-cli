@@ -27,6 +27,11 @@ on:
         type: boolean
         required: false
         default: false
+      force_recreate:
+        description: 'Bypass the closed-PR idempotency check (for testing).'
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: python-upgrade-agent
@@ -86,5 +91,8 @@ jobs:
           fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS+=(--dry-run)
+          fi
+          if [ "${{ inputs.force_recreate }}" = "true" ]; then
+            ARGS+=(--force-recreate)
           fi
           python -m scripts.python_upgrade_agent.agent "${ARGS[@]}"

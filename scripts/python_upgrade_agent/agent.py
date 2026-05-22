@@ -54,6 +54,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--model", default=ai.DEFAULT_MODEL, help="Model id.")
     p.add_argument("--dry-run", action="store_true",
                    help="Do not push, commit, or open a PR.")
+    p.add_argument("--force-recreate", action="store_true",
+                   help="Bypass the closed-PR idempotency check and open a new "
+                        "PR even if a previous one for this minor was closed. "
+                        "Use for testing / re-runs after a closed test PR.")
     p.add_argument("--verbose", action="store_true",
                    help="Write a detailed log (prompt, LLM raw output, timings) "
                         "to python_upgrade_agent.log in the repo root. "
@@ -230,9 +234,12 @@ def main(argv: list[str] | None = None) -> int:
             if state == "OPEN":
                 print(f"agent: PR #{number} already open for {new_minor}; nothing to do.")
                 return 0
-            # Closed (merged or not) -> require human override
-            print(f"agent: PR #{number} for {new_minor} is {state}; not auto-recreating.")
-            return 0
+            if args.force_recreate:
+                print(f"agent: PR #{number} for {new_minor} is {state}; --force-recreate set, proceeding.")
+            else:
+                # Closed (merged or not) -> require human override
+                print(f"agent: PR #{number} for {new_minor} is {state}; not auto-recreating.")
+                return 0
 
     # --- Step 3: discover candidates ---
     candidates = discover.git_grep(current.minor_str, repo_root)
