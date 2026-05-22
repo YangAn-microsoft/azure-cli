@@ -119,8 +119,15 @@ Rules (strict):
 3. For full X.Y.Z version strings (e.g. PYTHON_VERSION=3.13.13), use the new
    patch version. For X.Y-only strings, use the new minor. Do not invent
    patch versions where the original had only X.Y.
-4. CI matrix policy: when a job is parameterised by Python version, replace
-   the prior minor with the new minor (per reference PRs). Do not keep both.
+4. CI matrix policy: when a CI job (Azure Pipelines / GitHub Actions) is
+   parameterised by Python version, replace the prior minor with the new minor
+   (per reference PRs). Do not keep both. When the matrix entry's KEY also
+   embeds the minor (e.g. `Python313:` containing `python.version: '3.13'`),
+   rename the key too (`Python314:` containing `'3.14'`). Same for job IDs and
+   displayNames that embed the minor with no dot (e.g.
+   `AutomationFullTestPython313ProfileLatest` → `...Python314...`).
+   This rule applies ONLY to CI matrix/job parameterisation, not to package
+   metadata (see rule 11).
 5. If uncertain about whether a match should be updated, put it in `skipped`.
    Do NOT edit anything you are unsure about.
 6. Never propose edits to files outside the candidate list.
@@ -145,6 +152,23 @@ Rules (strict):
     - Hand-written docs describing supported versions → EDIT (bump).
     - Embedded patch versions in URLs/filenames where original is X.Y.Z → EDIT
       using the new patch.
+11. setup.py classifier lists are ADDITIVE. When a `setup.py` `classifiers`
+    list contains
+        'Programming Language :: Python :: <current_minor>',
+    do NOT replace it. INSERT a new sibling line for the new minor instead.
+    Express the edit so `new_string` contains BOTH the current-minor line
+    (unchanged) and the new-minor line appended on the next line, preserving
+    indentation and the trailing comma. Example:
+        old_string:
+            "    'Programming Language :: Python :: 3.13',"
+        new_string:
+            "    'Programming Language :: Python :: 3.13',\n    'Programming Language :: Python :: 3.14',"
+    The package keeps advertising support for the prior minor; downstream
+    maintainers drop it in a separate cycle.
+12. Preserve surrounding YAML quoting style. If neighbouring values for the
+    same key (e.g. `versionSpec: '3.12'`) are single-quoted, single-quote the
+    new value too. If unquoted, leave unquoted. Do not change quoting style
+    unilaterally — it produces noise in diffs and inconsistency in the file.
 
 Schema:
 {

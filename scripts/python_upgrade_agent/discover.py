@@ -43,15 +43,21 @@ class Candidate:
 
 
 def _build_pattern(current_minor: str) -> str:
-    """Regex matching X.Y or X.Y.Z but not X.Y.Z prefixes of other versions.
+    """Regex matching X.Y or X.Y.Z but not X.Y.Z prefixes of other versions,
+    plus dotless identifier forms like ``Python313``, ``py313``.
 
     Examples for current_minor='3.13':
-        matches: 3.13, 3.13.7, "3.13", 'Python3.13', PythonVersion=3.13
-        no match: 3.130, 3.13a, 13.13
+        matches: 3.13, 3.13.7, "3.13", 'Python3.13', PythonVersion=3.13,
+                 Python313, py313, AutomationFullTestPython313ProfileLatest
+        no match: 3.130, 3.13a, 13.13, Python3130, py3131
     """
     major, minor = current_minor.split(".")
-    # \b at end stops on word boundary; we also accept '.X' patch suffix.
-    return rf"(?<![0-9.]){re.escape(major)}\.{re.escape(minor)}(?:\.\d+)?\b"
+    # Dotted form (with patch-version optional, blocking false neighbours).
+    dotted = rf"(?<![0-9.]){re.escape(major)}\.{re.escape(minor)}(?:\.\d+)?\b"
+    # Dotless identifier form: Python313 / py313 / Py313 / python313.
+    # The (?![0-9]) prevents matching the prefix of Python3130, py3131, etc.
+    dotless = rf"[Pp]y(?:thon)?{re.escape(major)}{re.escape(minor)}(?![0-9])"
+    return f"{dotted}|{dotless}"
 
 
 def git_grep(current_minor: str, repo_root: Path | None = None) -> list[Candidate]:

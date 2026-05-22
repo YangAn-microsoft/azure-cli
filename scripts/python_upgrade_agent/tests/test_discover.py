@@ -61,6 +61,21 @@ def test_build_pattern_matches_minor_and_patch():
     assert not pat.search("13.13")
 
 
+def test_build_pattern_matches_dotless_identifiers():
+    import re
+    pat = re.compile(_build_pattern("3.13"))
+    # dotless identifier forms used in CI matrix keys and job IDs
+    assert pat.search("Python313:")
+    assert pat.search("- job: AutomationFullTestPython313ProfileLatest")
+    assert pat.search("py313")
+    assert pat.search("python313-env")
+    # must not match prefixes of unrelated higher patches
+    assert not pat.search("Python3130")
+    assert not pat.search("py3131")
+    # must not match a different minor
+    assert not pat.search("Python314")
+
+
 def test_git_grep_finds_expected_files(mini_repo: Path):
     cands = git_grep("3.13", mini_repo)
     paths = candidate_paths(cands)
