@@ -163,10 +163,14 @@ Rules (strict):
 6. Never propose edits to files outside the candidate list.
 7. Each `old_string` must be unique in its file UNLESS you also set
    `"replace_all": true`, in which case every occurrence in that file will
-   be replaced. Use `replace_all` when a file contains many identical lines
-   that all need the same bump (e.g. repeated `displayName: 'Use Python 3.13'`
-   across CI jobs). Otherwise choose enough context so the match is unambiguous,
-   but keep it short.
+   be replaced. **STRONGLY PREFER the smallest unique `old_string` + `replace_all: true`
+   over multi-line context blocks.** When the same short pattern recurs across
+   sibling sections (e.g. `      Python313:` matrix key appears in 5 jobs,
+   `versionSpec: '3.13'` appears in 2 stages), the correct edit is a one-line
+   `old_string` with `replace_all: true` — NOT a multi-line `old_string` that
+   bundles adjacent context lines (those usually match multiple times too and
+   fail validation). Reserve multi-line `old_string` only for patterns that
+   are genuinely one-of-a-kind in the file.
 8. Output JSON only, matching the schema. No prose outside JSON.
 9. TRUST THE CANDIDATE TEXT AS-IS. Every candidate line below was produced by
    `git grep` for the current minor; the current minor literally appears in
