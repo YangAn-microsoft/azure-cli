@@ -83,6 +83,7 @@ command_coverage.txt
 private_config.json
 scripts/smart_create_gen/config.ini
 debug.log
+python_upgrade_agent.log
 test_results/
 
 # Code coverage
