@@ -31,6 +31,11 @@ DEFAULT_MODEL = "openai/gpt-4.1"
 # Fallback reference PRs (azure-cli) if the GitHub query returns fewer than 3.
 FALLBACK_REFERENCE_PRS = [33313, 31928, 31895]
 
+# Cap each reference PR diff to keep the prompt under the GitHub Models
+# request-body limit (HTTP 413). 300 lines × ~80 chars × 3 PRs ≈ 72 KB of
+# few-shot text, leaving headroom for the system prompt + ~70 candidates.
+MAX_REF_DIFF_LINES = 300
+
 
 @dataclass(frozen=True)
 class ReferencePR:
@@ -87,15 +92,34 @@ def fetch_reference_prs(
 
 
 def _fetch_pr_diff(repo: str, number: int) -> str:
-    """Fetch a PR's unified diff via `gh pr diff`."""
+    """Fetch a PR's unified diff via `gh pr diff`, capped at MAX_REF_DIFF_LINES.
+
+    Large historical PRs (e.g. #33313, ~535 lines) combined with the other
+    two reference PRs and ~70 candidates can push the prompt past the
+    GitHub Models gateway request-body limit (HTTP 413). Truncate the middle
+    of any oversized diff; head/tail are usually the most representative
+    parts for few-shot learning.
+    """
     try:
         result = subprocess.run(
             ["gh", "pr", "diff", str(number), "--repo", repo],
             capture_output=True, text=True, check=True, encoding="utf-8",
         )
-        return result.stdout
+        text = result.stdout
     except subprocess.CalledProcessError:
         return ""
+
+    lines = text.splitlines()
+    if len(lines) <= MAX_REF_DIFF_LINES:
+        return text
+    head_n = MAX_REF_DIFF_LINES // 2
+    tail_n = MAX_REF_DIFF_LINES - head_n
+    truncated = (
+        lines[:head_n]
+        + [f"... [{len(lines) - MAX_REF_DIFF_LINES} lines truncated] ..."]
+        + lines[-tail_n:]
+    )
+    return "\n".join(truncated) + "\n"
 
 
 SYSTEM_PROMPT = """\
