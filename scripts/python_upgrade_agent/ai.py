@@ -203,6 +203,18 @@ Rules (strict):
     same key (e.g. `versionSpec: '3.12'`) are single-quoted, single-quote the
     new value too. If unquoted, leave unquoted. Do not change quoting style
     unilaterally — it produces noise in diffs and inconsistency in the file.
+13. Historical-context comments are SKIP, not edit. When the current minor
+    appears inside a comment that explains WHY a past change was made and
+    cites a specific PR / issue URL (e.g.
+        `# serviceconnector-passwordless's dependency is not compatible with 3.13 https://github.com/Azure/azure-cli/pull/31895`
+    or
+        `# Disable foo: https://github.com/Azure/azure-cli/issues/12345 — broken on 3.12`),
+    the version number is part of the historical record describing the linked
+    PR/issue. Do NOT bump it. Put the candidate in `skipped` with
+    why = "historical comment referencing past PR/issue; version is part of
+    the recorded reason, not a live build target". This rule overrides rule
+    10's "shell scripts → EDIT" default whenever the line is a `#` comment
+    containing a GitHub PR/issue URL.
 
 Schema:
 {
