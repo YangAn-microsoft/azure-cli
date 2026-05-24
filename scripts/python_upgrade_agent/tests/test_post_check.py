@@ -90,3 +90,25 @@ def test_missing_file_does_not_crash(tmp_path: Path):
         edits=[], skipped=[],
     )
     assert warnings == []
+
+
+def test_additive_classifier_line_is_expected_leftover(tmp_path: Path):
+    # setup.py classifier list is additive per rule 11: the current-minor
+    # classifier stays alongside the new one, so post-check must not warn.
+    f = tmp_path / "setup.py"
+    f.write_text(
+        "classifiers = [\n"
+        "    'Programming Language :: Python :: 3.13',\n"
+        "    'Programming Language :: Python :: 3.14',\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    # No edit applied (the LLM produced an edit on a different snippet); the
+    # 3.13 classifier line still exists post-edit and should be ignored.
+    warnings = find_forgotten_hits(
+        repo_root=tmp_path, current_minor="3.13",
+        candidates=[_cand("setup.py", 2,
+                          "    'Programming Language :: Python :: 3.13',")],
+        edits=[], skipped=[],
+    )
+    assert warnings == []

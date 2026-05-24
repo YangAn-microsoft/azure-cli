@@ -30,6 +30,18 @@ def _apply_edits_to_text(text: str, edits_for_path: list[ValidatedEdit]) -> str:
     return text
 
 
+def _is_expected_leftover(line: str, current_minor: str) -> bool:
+    """Lines we deterministically know SHOULD remain after a correct plan.
+
+    setup.py / setup.cfg / pyproject.toml classifier lists are additive
+    (rule 11): the current-minor `Programming Language :: Python :: X.Y`
+    classifier is preserved alongside the new-minor one, so it is expected
+    to still match the current-minor regex post-edit.
+    """
+    stripped = line.strip()
+    return f"Programming Language :: Python :: {current_minor}" in stripped
+
+
 def find_forgotten_hits(
     repo_root: Path,
     current_minor: str,
@@ -72,6 +84,8 @@ def find_forgotten_hits(
         skipped_entries = skipped_by_path.get(path, [])
         for line_no, line in enumerate(post.splitlines(), start=1):
             if not pattern.search(line):
+                continue
+            if _is_expected_leftover(line, current_minor):
                 continue
             line_stripped = line.strip()
             consciously_skipped = False

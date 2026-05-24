@@ -6,8 +6,7 @@ for the full design.
 
 **Embedded Python**: `{current_full}` → `{new_full}` (latest stable patch on python.org)
 
-### Files updated ({n_edits})
-{edits_list}
+The list of changed files is in the **Files changed** tab.
 
 ### Locations the agent did NOT update — please review
 
@@ -33,5 +32,4 @@ comments or test fixtures, but occasionally indicate a missed bump.
 
 ---
 
-*This is Phase 1 of the agent: mechanical bumps only. CI failures are handed off
-to humans. See the plan document for the full phased roadmap.*
+{next_steps}

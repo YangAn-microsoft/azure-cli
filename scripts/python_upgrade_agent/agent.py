@@ -148,8 +148,7 @@ def _render_pr_body(
     forgotten: list[str],
 ) -> str:
     template = (Path(__file__).parent / "pr_template.md").read_text(encoding="utf-8")
-    edits_list = "\n".join(f"- `{e.path}` — {e.reason}" if e.reason else f"- `{e.path}`"
-                           for e in sorted(edits, key=lambda e: e.path))
+    next_steps = _render_next_steps(current=current, target=target)
     if skipped:
         skipped_lines = []
         for s in skipped:
@@ -166,20 +165,51 @@ def _render_pr_body(
         forgotten_list = "\n".join(f"- `{w}`" for w in forgotten)
     else:
         forgotten_list = "_(none — post-check found no leftover references.)_"
-    return template.format(
+    # Substitute placeholders other than {next_steps} via .format. Then plug
+    # next_steps in via plain replace so its embedded braces (YAML/code) do
+    # not get reinterpreted as format fields.
+    body = template.format(
         current_minor=current.minor_str,
         new_minor=target.minor_str,
         current_full=current.full_str,
         new_full=target.full_str,
-        n_edits=len(edits),
-        edits_list=edits_list,
         skipped_list=skipped_list,
         forgotten_list=forgotten_list,
         model=model,
         run_url=run_url or "(local run)",
         reference_prs=refs,
         notes=notes or "(none)",
+        next_steps="__NEXT_STEPS_SENTINEL__",
     )
+    return body.replace("__NEXT_STEPS_SENTINEL__", next_steps)
+
+
+def _render_next_steps(*, current: detect.Version, target: detect.Version) -> str:
+    """Load next_steps_template.md and substitute version placeholders.
+
+    Uses plain str.replace (not .format) because the template embeds YAML and
+    shell snippets with literal braces that would collide with .format syntax.
+    Placeholders use the `{{name}}` form for readability.
+    """
+    raw = (Path(__file__).parent / "next_steps_template.md").read_text(encoding="utf-8")
+    new_minor_dotless = target.minor_str.replace(".", "")
+    substitutions = {
+        "{{current_minor}}": current.minor_str,
+        "{{new_minor}}": target.minor_str,
+        "{{current_full}}": current.full_str,
+        "{{new_full}}": target.full_str,
+        "{{new_minor_dotless}}": new_minor_dotless,
+    }
+    out = raw
+    for key, val in substitutions.items():
+        out = out.replace(key, val)
+    # Strip the leading HTML comment block (developer-facing notes about
+    # placeholders) before emitting into the PR body.
+    if out.startswith("<!--"):
+        end = out.find("-->")
+        if end != -1:
+            out = out[end + 3:].lstrip()
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
