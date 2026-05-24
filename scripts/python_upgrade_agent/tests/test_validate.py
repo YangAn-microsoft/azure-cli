@@ -87,3 +87,73 @@ def test_validate_rejects_oversize(repo: Path, monkeypatch):
     }
     with pytest.raises(ValidationError, match="Too many lines"):
         validate(output, {"a.txt"}, repo)
+
+
+def test_validate_silently_skips_true_duplicate(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("foo: 3.13\n", encoding="utf-8")
+    output = {
+        "edits": [
+            {"path": "a.txt", "old_string": "foo: 3.13",
+             "new_string": "foo: 3.14", "reason": "bump"},
+            {"path": "a.txt", "old_string": "foo: 3.13",
+             "new_string": "foo: 3.14", "reason": "bump"},
+        ]
+    }
+    edits = validate(output, {"a.txt"}, tmp_path)
+    assert len(edits) == 1
+
+
+def test_validate_rejects_conflicting_duplicate(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("foo: 3.13\n", encoding="utf-8")
+    output = {
+        "edits": [
+            {"path": "a.txt", "old_string": "foo: 3.13",
+             "new_string": "foo: 3.14", "reason": ""},
+            {"path": "a.txt", "old_string": "foo: 3.13",
+             "new_string": "foo: 4.00", "reason": ""},
+        ]
+    }
+    with pytest.raises(ValidationError, match="conflicting duplicate"):
+        validate(output, {"a.txt"}, tmp_path)
+
+
+def test_validate_rejects_malformed_additive_classifier(tmp_path: Path):
+    (tmp_path / "setup.py").write_text(
+        "classifiers = [\n    'Programming Language :: Python :: 3.13',\n]\n",
+        encoding="utf-8",
+    )
+    output = {
+        "edits": [
+            {
+                "path": "setup.py",
+                "old_string": "    'Programming Language :: Python :: 3.13',",
+                "new_string":
+                    "    'Programming Language :: Python :: Python :: 3.13',\n"
+                    "    'Programming Language :: Python :: 3.14',",
+                "reason": "additive",
+            }
+        ]
+    }
+    with pytest.raises(ValidationError, match="additive classifier"):
+        validate(output, {"setup.py"}, tmp_path)
+
+
+def test_validate_accepts_well_formed_additive_classifier(tmp_path: Path):
+    (tmp_path / "setup.py").write_text(
+        "classifiers = [\n    'Programming Language :: Python :: 3.13',\n]\n",
+        encoding="utf-8",
+    )
+    output = {
+        "edits": [
+            {
+                "path": "setup.py",
+                "old_string": "    'Programming Language :: Python :: 3.13',",
+                "new_string":
+                    "    'Programming Language :: Python :: 3.13',\n"
+                    "    'Programming Language :: Python :: 3.14',",
+                "reason": "additive",
+            }
+        ]
+    }
+    edits = validate(output, {"setup.py"}, tmp_path)
+    assert len(edits) == 1

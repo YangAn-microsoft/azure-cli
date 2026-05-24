@@ -197,6 +197,12 @@ Rules (strict):
             "    'Programming Language :: Python :: 3.13',"
         new_string:
             "    'Programming Language :: Python :: 3.13',\n    'Programming Language :: Python :: 3.14',"
+    CRITICAL: `old_string` must appear as an EXACT substring of `new_string`.
+    Do NOT mutate the preserved line. In particular:
+        WRONG: "    'Programming Language :: Python :: Python :: 3.13',\n    'Programming Language :: Python :: 3.14',"
+               (the LLM duplicated `Python ::` while typing out the preserved line)
+        WRONG: "    'Programming Language :: Python :: 3.14',"
+               (replaced instead of appended — drops 3.13 support)
     The package keeps advertising support for the prior minor; downstream
     maintainers drop it in a separate cycle.
 12. Preserve surrounding YAML quoting style. If neighbouring values for the

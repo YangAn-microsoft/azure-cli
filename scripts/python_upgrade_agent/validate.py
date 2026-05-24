@@ -98,9 +98,36 @@ def validate(
                 f"edits[{i}]: old_string and new_string are identical."
             )
 
+        # Additive-classifier invariant (rule 11): when the LLM bumps a
+        # setup.py `Programming Language :: Python :: X.Y` classifier line,
+        # the prior-minor line must be preserved verbatim and a new sibling
+        # appended — so old_string MUST appear as a substring of new_string.
+        # Without this check the LLM occasionally produces typos like
+        # `Programming Language :: Python :: Python :: 3.13` while
+        # "preserving" the original.
+        if "Programming Language :: Python ::" in old_s:
+            if old_s not in new_s:
+                raise ValidationError(
+                    f"edits[{i}]: additive classifier edit must preserve the "
+                    f"original line verbatim inside new_string. The "
+                    f"old_string was not found as a substring of new_string. "
+                    f"old_string={old_s!r} new_string={new_s!r}"
+                )
+
+        # Duplicates: silently skip a true duplicate (same path + old + new +
+        # replace_all) — the LLM occasionally emits the same edit twice and a
+        # hard error here causes a retry that historically loses many other
+        # valid edits. Only error on a real conflict where the same
+        # (path, old_string) maps to a different new_string.
         key = (path, old_s)
         if key in seen_keys:
-            raise ValidationError(f"edits[{i}]: duplicate edit (same path+old_string).")
+            prior = next((x for x in edits if x.path == path and x.old_string == old_s), None)
+            if prior is not None and prior.new_string == new_s and prior.replace_all == replace_all:
+                continue
+            raise ValidationError(
+                f"edits[{i}]: conflicting duplicate edit (same path+old_string "
+                f"but different new_string or replace_all flag)."
+            )
         seen_keys.add(key)
 
         total_lines += _count_changed_lines(old_s, new_s) * occurrences
