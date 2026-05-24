@@ -16,6 +16,15 @@ Tick each item once you've decided whether to bump it or leave as-is.
 
 {skipped_list}
 
+### Post-check: possible forgotten references
+
+A deterministic sweep ran after the LLM's plan was applied in memory; the lines
+below still match the previous minor and were **not** in the skipped list, so
+they may have been overlooked. Please verify — these are most often historical
+comments or test fixtures, but occasionally indicate a missed bump.
+
+{forgotten_list}
+
 ### Agent metadata
 - **Model**: `{model}`
 - **Run**: {run_url}

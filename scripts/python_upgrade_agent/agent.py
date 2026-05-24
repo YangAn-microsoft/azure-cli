@@ -22,7 +22,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import ai, detect, discover, github_ops, validate
+from . import ai, detect, discover, github_ops, post_check, validate
 
 PR_TITLE_TMPL = "{{Packaging}} Support Python {new_minor}"
 BRANCH_TMPL = "python-{new_minor}-upgrade"
@@ -145,6 +145,7 @@ def _render_pr_body(
     run_url: str,
     references: list[ai.ReferencePR],
     notes: str,
+    forgotten: list[str],
 ) -> str:
     template = (Path(__file__).parent / "pr_template.md").read_text(encoding="utf-8")
     edits_list = "\n".join(f"- `{e.path}` — {e.reason}" if e.reason else f"- `{e.path}`"
@@ -161,6 +162,10 @@ def _render_pr_body(
     else:
         skipped_list = "_(none — the agent edited everything it found relevant.)_"
     refs = ", ".join(f"#{r.number}" for r in references) or "(none)"
+    if forgotten:
+        forgotten_list = "\n".join(f"- `{w}`" for w in forgotten)
+    else:
+        forgotten_list = "_(none — post-check found no leftover references.)_"
     return template.format(
         current_minor=current.minor_str,
         new_minor=target.minor_str,
@@ -169,6 +174,7 @@ def _render_pr_body(
         n_edits=len(edits),
         edits_list=edits_list,
         skipped_list=skipped_list,
+        forgotten_list=forgotten_list,
         model=model,
         run_url=run_url or "(local run)",
         reference_prs=refs,
@@ -318,6 +324,28 @@ def main(argv: list[str] | None = None) -> int:
         vlog.section("Notes")
         vlog.write(notes or "(none)")
 
+    # --- Step 5b: deterministic post-check for forgotten edits ---
+    # Simulate the LLM's plan in memory and re-scan candidate files for the
+    # current minor. Anything still matching that isn't in `skipped` is a
+    # forgotten edit and gets surfaced (in logs, dry-run output, and PR body)
+    # for the reviewer. Non-fatal: the PR still opens.
+    forgotten = post_check.find_forgotten_hits(
+        repo_root=repo_root,
+        current_minor=current.minor_str,
+        candidates=candidates,
+        edits=edits,
+        skipped=skipped,
+    )
+    if forgotten:
+        print(f"agent: post-check found {len(forgotten)} forgotten reference(s):",
+              file=sys.stderr)
+        for w in forgotten:
+            print(f"  - {w}", file=sys.stderr)
+    if vlog.enabled:
+        vlog.section(f"Post-check forgotten references ({len(forgotten)})")
+        for w in forgotten:
+            vlog.write(f"- {w}")
+
     # --- Step 6: apply, commit, push, open PR (or print in dry-run) ---
     if args.dry_run:
         print("--- DRY RUN: proposed edits ---")
@@ -329,6 +357,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n--- DRY RUN: {len(skipped)} skipped ---")
         for s in skipped:
             print(f"  {s.get('path')} @ {s.get('location')}: {s.get('why')}")
+        print(f"\n--- DRY RUN: {len(forgotten)} forgotten ---")
+        for w in forgotten:
+            print(f"  {w}")
         print(f"\nnotes: {notes}")
         return 0
 
@@ -354,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
         run_url=os.environ.get("AGENT_RUN_URL", ""),
         references=references,
         notes=notes,
+        forgotten=forgotten,
     )
     title = PR_TITLE_TMPL.format(new_minor=new_minor)
     number = github_ops.open_draft_pr(
