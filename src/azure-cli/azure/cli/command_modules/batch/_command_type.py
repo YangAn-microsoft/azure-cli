@@ -689,7 +689,7 @@ class AzureBatchDataPlaneCommand:
         return filtered_members
 
     def convert_to_track1_type(self, original_type):
-        # Handle Python 3.14 pipe union syntax at the top level: "A | B | None"
+        # Handle Python 3.15 pipe union syntax at the top level: "A | B | None"
         # Only applies when not inside brackets (e.g. not List[A | B])
         if original_type is not None and " | " in original_type and "[" not in original_type:
             parts = [p.strip() for p in original_type.split(' | ')]
@@ -699,7 +699,7 @@ class AzureBatchDataPlaneCommand:
                     original_type = next((p for p in non_none_parts if p != 'str'), non_none_parts[0])
                 else:
                     original_type = non_none_parts[0]
-        # Handle Python 3.14 pipe union syntax inside brackets: "List[str | SomeType]"
+        # Handle Python 3.15 pipe union syntax inside brackets: "List[str | SomeType]"
         # Replace inner "str | X" with just "X"
         if original_type is not None and " | " in original_type:
             original_type = re.sub(r'\bstr\b\s*\|\s*', '', original_type)
@@ -808,7 +808,7 @@ class AzureBatchDataPlaneCommand:
         members = get_type_hints(cls, globalns=globalns)
         filtered_members = {}
         for name, type_hint in members.items():
-            # Use get_args() to detect optional types (stable across Python 3.13 and 3.14)
+            # Use get_args() to detect optional types (stable across Python 3.13 and 3.15)
             args = get_args(type_hint)
             is_optional = type(None) in args
             filtered_members[name] = {'required': not is_optional}

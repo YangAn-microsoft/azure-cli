@@ -7234,7 +7234,7 @@ class _StackRuntimeHelper(_AbstractStackRuntimeHelper):
     def _get_version_label(display_text):
         """Extract human-readable version label from minor version display text.
         Examples: '.NET 10 (LTS)' -> '10.0 (LTS)', 'Node 24 LTS' -> '24.0 LTS',
-                  'Python 3.14' -> '3.14', 'PHP 8.4' -> '8.4'
+                  'Python 3.15' -> '3.15', 'PHP 8.4' -> '8.4'
         """
         match = re.match(r'.*?(\d+(?:\.\d+)*)(?:\s*\((LTS|STS)\)|\s+(LTS|STS))?\s*$', display_text)
         if match:
