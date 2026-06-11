@@ -1,0 +1,113 @@
+name: Python Upgrade Agent
+
+# Runs daily. Detects new stable Python minor releases on python.org,
+# and opens a draft PR upgrading azure-cli to support it.
+# See scripts/python_upgrade_agent/README.md for full design.
+
+on:
+  schedule:
+    # 09:00 UTC daily. Cron does not run on forks unless explicitly enabled.
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      force_current_minor:
+        description: 'Override detected current minor (e.g. "3.13"). Empty = autodetect.'
+        required: false
+        default: ''
+      force_new_minor:
+        description: 'Override detected new minor (e.g. "3.14"). Empty = autodetect.'
+        required: false
+        default: ''
+      force_new_patch:
+        description: 'Override detected new patch (e.g. "3.14.5"). Empty = autodetect.'
+        required: false
+        default: ''
+      dry_run:
+        description: 'If true, do not push, commit, or open a PR.'
+        type: boolean
+        required: false
+        default: false
+      force_recreate:
+        description: 'Bypass the closed-PR idempotency check (for testing).'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: python-upgrade-agent
+  cancel-in-progress: false
+
+permissions:
+  # All write operations go through the App token. The default GITHUB_TOKEN
+  # only needs models:read for the LLM call.
+  contents: read
+  models: read
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Kill switch
+        env:
+          ENABLED: ${{ vars.PYTHON_UPGRADE_AGENT_ENABLED }}
+        run: |
+          # Disabled unless repo variable is explicitly set to "true".
+          if [ "$ENABLED" != "true" ]; then
+            echo "Agent disabled (set repo variable PYTHON_UPGRADE_AGENT_ENABLED=true to enable)."
+            exit 0
+          fi
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure git identity
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          # Identity matches the App so commits/PRs attribute to it.
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Run agent
+        env:
+          # App token: contents+pull-requests write; used by git push & gh pr create.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Default workflow token: has models:read for the LLM call.
+          MODELS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          AGENT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ARGS=()
+          if [ -n "${{ inputs.force_current_minor }}" ]; then
+            ARGS+=(--force-current-minor "${{ inputs.force_current_minor }}")
+          fi
+          if [ -n "${{ inputs.force_new_minor }}" ]; then
+            ARGS+=(--force-new-minor "${{ inputs.force_new_minor }}")
+          fi
+          if [ -n "${{ inputs.force_new_patch }}" ]; then
+            ARGS+=(--force-new-patch "${{ inputs.force_new_patch }}")
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          if [ "${{ inputs.force_recreate }}" = "true" ]; then
+            ARGS+=(--force-recreate)
+          fi
+          python -m scripts.python_upgrade_agent.agent "${ARGS[@]}"
