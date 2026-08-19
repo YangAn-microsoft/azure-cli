@@ -23,7 +23,6 @@ from azure.cli.command_modules.vm._template_builder import StorageProfile
 from azure.cli.core import keys
 from azure.core.exceptions import ResourceNotFoundError
 
-from ._client_factory import _compute_client_factory
 from ._actions import _get_latest_image_version_by_aaz
 
 
@@ -1582,7 +1581,7 @@ def _resolve_role_id(cli_ctx, role, scope):
         except ValueError:
             pass
         if not role_id:  # retrieve role id
-            role_defs = list(client.list(scope, "roleName eq '{}'".format(role)))
+            role_defs = list(client.list(scope, filter="roleName eq '{}'".format(role)))
             if not role_defs:
                 raise CLIError("Role '{}' doesn't exist.".format(role))
             if len(role_defs) > 1:
@@ -1936,6 +1935,7 @@ def process_vmss_create_namespace(cmd, namespace):
     _validate_vmss_create_automatic_repairs(cmd, namespace)
     _validate_vmss_create_host_group(cmd, namespace)
     _validate_vmss_create_auto_zone_placement(namespace)
+    _validate_vmss_auto_zone_placement(namespace)
 
     if namespace.secrets:
         _validate_secrets(namespace.secrets, namespace.os_type)
@@ -1959,6 +1959,12 @@ def validate_vmss_update_namespace(cmd, namespace):  # pylint: disable=unused-ar
     _validate_vmss_update_automatic_repairs(cmd, namespace)
     _validate_capacity_reservation_group(cmd, namespace)
     _validate_vm_vmss_update_ephemeral_placement(cmd, namespace)
+    _validate_vmss_auto_zone_placement(namespace)
+
+
+def _validate_vmss_auto_zone_placement(namespace):
+    if namespace.include_zones and namespace.exclude_zones:
+        raise MutuallyExclusiveArgumentError("You can only specify one of --include-zones and --exclude-zones")
 # endregion
 
 
@@ -2147,9 +2153,9 @@ def process_snapshot_create_namespace(cmd, namespace):
                     from azure.cli.core.util import parse_proxy_resource_id
                     result = parse_proxy_resource_id(namespace.source_disk or namespace.source_snapshot)
                     try:
-                        source_info, _ = _get_disk_or_snapshot_info(cmd.cli_ctx,
-                                                                    result['resource_group'],
-                                                                    result['name'])
+                        source_info, _ = _get_disk_or_snapshot_info_by_aaz(cmd.cli_ctx,
+                                                                           result['resource_group'],
+                                                                           result['name'])
                     except Exception:  # pylint: disable=broad-except
                         # There's a chance that the source doesn't exist, eg, vmss os disk.
                         # You can get the id of vmss os disk by
@@ -2161,7 +2167,7 @@ def process_snapshot_create_namespace(cmd, namespace):
                     get_default_location_from_resource_group(cmd, namespace)
                 # if the source location differs from target location, then it's copy_start scenario
                 if namespace.incremental:
-                    namespace.copy_start = source_info.location != namespace.location
+                    namespace.copy_start = source_info.get('location') != namespace.location
         except HttpResponseError:
             raise ArgumentUsageError(usage_error)
 
@@ -2231,11 +2237,11 @@ def _figure_out_storage_source(cli_ctx, resource_group_name, source):
     elif '/restorepoints/' in source.lower():
         source_restore_point = source
     else:
-        source_info, is_snapshot = _get_disk_or_snapshot_info(cli_ctx, resource_group_name, source)
+        source_info, is_snapshot = _get_disk_or_snapshot_info_by_aaz(cli_ctx, resource_group_name, source)
         if is_snapshot:
-            source_snapshot = source_info.id
+            source_snapshot = source_info.get('id')
         else:
-            source_disk = source_info.id
+            source_disk = source_info.get('id')
 
     return (source_blob_uri, source_disk, source_snapshot, source_restore_point, source_info)
 
@@ -2262,19 +2268,6 @@ def _figure_out_storage_source_by_aaz(cli_ctx, resource_group_name, source):
             source_disk = source_info.get('id')
 
     return (source_blob_uri, source_disk, source_snapshot, source_restore_point, source_info)
-
-
-def _get_disk_or_snapshot_info(cli_ctx, resource_group_name, source):
-    compute_client = _compute_client_factory(cli_ctx)
-    is_snapshot = True
-
-    try:
-        info = compute_client.snapshots.get(resource_group_name, source)
-    except ResourceNotFoundError:
-        is_snapshot = False
-        info = compute_client.disks.get(resource_group_name, source)
-
-    return info, is_snapshot
 
 
 def _get_disk_or_snapshot_info_by_aaz(cli_ctx, resource_group_name, source):
@@ -2892,3 +2885,83 @@ def _validate_community_gallery_legal_agreement_acceptance(cmd, namespace):
     if not prompt_y_n(msg, default="y"):
         import sys
         sys.exit(0)
+
+
+def process_vmss_lifecycle_hook_remove(cmd, namespace):  # pylint: disable=unused-argument
+    if namespace.remove_all and namespace.type:
+        raise MutuallyExclusiveArgumentError("Specify exactly one of --type or --all.")
+
+    if not namespace.remove_all and not namespace.type:
+        raise RequiredArgumentMissingError("Specify exactly one of --type or --all.")
+
+
+def process_vmss_lifecycle_hook_event_update(cmd, namespace):  # pylint: disable=unused-argument
+    if namespace.instance_ids is not None and not namespace.action_state:
+        raise RequiredArgumentMissingError("--instance-ids requires --action-state.")
+
+    if namespace.action_state is None and namespace.wait_until is None:
+        raise RequiredArgumentMissingError("Specify at least one of --action-state or --wait-until.")
+
+    if namespace.action_state is not None:
+        _resolve_vmss_lifecycle_hook_event_target_resources(cmd, namespace)
+
+
+def process_vmss_lifecycle_hook_event_action(cmd, namespace):  # pylint: disable=unused-argument
+    _resolve_vmss_lifecycle_hook_event_target_resources(cmd, namespace)
+
+
+def _resolve_vmss_lifecycle_hook_event_target_resources(cmd, namespace):
+    from azure.cli.core.azclierror import InvalidArgumentValueError
+    from .aaz.latest.vmss.lifecycle_hook_event import Show as _lifecycleHookEventShow
+
+    event = _lifecycleHookEventShow(cli_ctx=cmd.cli_ctx)(command_args={
+        'lifecycle_hook_event_name': namespace.lifecycle_hook_event_name,
+        'resource_group': namespace.resource_group_name,
+        'vmss_name': namespace.vmss_name,
+    })
+
+    target_resources = event.get('properties', {}).get('targetResources') or []
+
+    identifier_to_id = {}
+    target_name_to_id = {}
+    for target in target_resources:
+        resource_id = target.get('resource', {}).get('id')
+        if resource_id:
+            target_name = resource_id.rsplit('/', 1)[-1].lower()
+            identifier_to_id[target_name] = resource_id
+            target_name_to_id[target_name] = resource_id
+
+    if not namespace.instance_ids:
+        namespace.target_resource_ids = list(identifier_to_id.values())
+        return
+
+    requested_identifiers = {instance_id.lower() for instance_id in namespace.instance_ids}
+    if not requested_identifiers.issubset(identifier_to_id):
+        from .operations.vmss import VMSSListInstances
+        instances = VMSSListInstances(cli_ctx=cmd.cli_ctx)(command_args={
+            'resource_group': namespace.resource_group_name,
+            'virtual_machine_scale_set_name': namespace.vmss_name,
+        })
+        for instance in instances:
+            instance_name = instance.get('name')
+            instance_id = instance.get('instanceId')
+            if instance_name and instance_id is not None:
+                target_resource_id = target_name_to_id.get(instance_name.lower())
+                if target_resource_id:
+                    identifier_to_id[str(instance_id).lower()] = target_resource_id
+
+    resolved_ids = []
+    unknown_ids = []
+    for instance_id in namespace.instance_ids:
+        resource_id = identifier_to_id.get(instance_id.lower())
+        if resource_id is None:
+            unknown_ids.append(instance_id)
+        else:
+            resolved_ids.append(resource_id)
+
+    if unknown_ids:
+        raise InvalidArgumentValueError("The following instance ids were not found among the target resources of "
+                                        "lifecycle hook event '{}': {}"
+                                        .format(namespace.lifecycle_hook_event_name, ", ".join(unknown_ids)))
+
+    namespace.target_resource_ids = resolved_ids

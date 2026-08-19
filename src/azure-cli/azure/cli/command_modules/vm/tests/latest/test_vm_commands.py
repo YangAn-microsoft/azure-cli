@@ -1954,6 +1954,24 @@ class VMCreateAndStateModificationsScenarioTest(ScenarioTest):
         # Expecting no results
         self.cmd('vm list --resource-group {rg}', checks=self.is_empty())
 
+    @ResourceGroupPreparer(name_prefix='cli_test_vm_force_deallocate_', location='centralus')
+    def test_vm_force_deallocate(self, resource_group, resource_group_location):
+        self.kwargs.update({
+            'loc': resource_group_location,
+            'vm': self.create_random_name('vm', 15),
+        })
+
+        self.cmd('vm create -g {rg} -n {vm} -l {loc} --image Ubuntu2204 --zone 1 '
+                 '--zone-movement true --storage-sku Premium_ZRS '
+                 '--tags useNRPDeallocateOnFabricFailure=true --admin-username azureuser '
+                 '--admin-password Test123456789# --authentication-type password --nsg-rule NONE '
+                 '--size Standard_D2s_v3', checks=[
+                     self.check('zones', '1'),
+                 ])
+
+        self.cmd('vm deallocate -g {rg} -n {vm} --force-deallocate')
+        self._check_vm_power_state('PowerState/deallocated')
+
     @AllowLargeResponse(size_kb=99999)
     @ResourceGroupPreparer(name_prefix='cli_test_vm_user_update_win_')
     def test_vm_user_update_win(self, resource_group):
@@ -4658,8 +4676,97 @@ class VMSSCreateAndModify(ScenarioTest):
         ])
 
 
-class VMSSCreateOptions(ScenarioTest):
+class VMSSLifecycleHookScenarioTest(ScenarioTest):
 
+    @AllowLargeResponse()
+    @ResourceGroupPreparer(name_prefix='cli_test_vmss_lifecycle_hook')
+    def test_vmss_lifecycle_hook(self, resource_group):
+        self.kwargs.update({
+            'vmss': self.create_random_name('vmss', 15)
+        })
+        self.cmd('vmss create -g {rg} -n {vmss} --image Ubuntu2204 --admin-username myadmin '
+                 '--admin-password testPassword0 --orchestration-mode Uniform --instance-count 2 '
+                 '--vm-sku Standard_D2s_v3')
+
+        # Updating / showing a non-existent hook type fails.
+        self.cmd('vmss lifecycle-hook update -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling '
+                 '--wait-duration PT2H', expect_failure=True)
+        self.cmd('vmss lifecycle-hook show -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling',
+                 expect_failure=True)
+
+        self.cmd('vmss lifecycle-hook add -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling '
+                 '--wait-duration PT8H --default-action Approve', checks=[
+                     self.check("lifecycleHooksProfile.lifecycleHooks[?type=='UpgradeAutoOSScheduling'] | [0].waitDuration", 'PT8H'),
+                     self.check("lifecycleHooksProfile.lifecycleHooks[?type=='UpgradeAutoOSScheduling'] | [0].defaultAction", 'Approve')
+                 ])
+        self.cmd('vmss lifecycle-hook list -g {rg} --vmss-name {vmss}',
+                 checks=[self.check('length(@)', 1)])
+        self.cmd('vmss lifecycle-hook show -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling',
+                 checks=[self.check('waitDuration', 'PT8H'), self.check('defaultAction', 'Approve')])
+
+        # remove: --type and --all are mutually exclusive, and exactly one is required.
+        self.cmd('vmss lifecycle-hook remove -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling --all',
+                 expect_failure=True)
+        self.cmd('vmss lifecycle-hook remove -g {rg} --vmss-name {vmss}', expect_failure=True)
+
+        # Add a second lifecycle hook of a different type.
+        self.cmd('vmss lifecycle-hook add -g {rg} --vmss-name {vmss} --type UpgradeAutoOSRollingBatchStarting '
+                 '--wait-duration PT20M --default-action Approve', checks=[
+                     self.check("lifecycleHooksProfile.lifecycleHooks[?type=='UpgradeAutoOSRollingBatchStarting'] | [0].waitDuration", 'PT20M')
+                 ])
+        self.cmd('vmss lifecycle-hook list -g {rg} --vmss-name {vmss}',
+                 checks=[self.check('length(@)', 2)])
+
+        # Adding a hook whose type already exists is rejected client-side.
+        self.cmd('vmss lifecycle-hook add -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling '
+                 '--wait-duration PT1H', expect_failure=True)
+        self.cmd('vmss lifecycle-hook show -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling',
+                 checks=[self.check('waitDuration', 'PT8H')])
+
+        # Update one hook's wait-duration and confirm.
+        self.cmd('vmss lifecycle-hook update -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling '
+                 '--wait-duration PT2H')
+        self.cmd('vmss lifecycle-hook show -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling',
+                 checks=[self.check('waitDuration', 'PT2H')])
+
+        # Remove one hook by --type; one hook remains.
+        self.cmd('vmss lifecycle-hook remove -g {rg} --vmss-name {vmss} --type UpgradeAutoOSScheduling')
+        self.cmd('vmss lifecycle-hook list -g {rg} --vmss-name {vmss}',
+                 checks=[self.check('length(@)', 1)])
+
+        # Remove all remaining hooks with --all.
+        self.cmd('vmss lifecycle-hook remove -g {rg} --vmss-name {vmss} --all')
+        self.cmd('vmss lifecycle-hook list -g {rg} --vmss-name {vmss}',
+                 checks=[self.check('length(@)', 0)])
+
+
+class VMSSLifecycleHookEventScenarioTest(ScenarioTest):
+
+    @AllowLargeResponse()
+    @ResourceGroupPreparer(name_prefix='cli_test_vmss_lch_event')
+    # Not including approve/reject/show and update --action-state as they required live platform-generated event
+    def test_vmss_lifecycle_hook_event(self, resource_group):
+        self.kwargs.update({
+            'vmss': self.create_random_name('vmss', 15)
+        })
+        self.cmd('vmss create -g {rg} -n {vmss} --image Ubuntu2204 --admin-username myadmin '
+                 '--admin-password testPassword0 --orchestration-mode Uniform --instance-count 2 '
+                 '--vm-sku Standard_D2s_v3')
+
+        # Lifecycle hook events are platform-generated; a fresh scale set has none.
+        self.cmd('vmss lifecycle-hook-event list -g {rg} --vmss-name {vmss}',
+                 checks=[self.check('length(@)', 0)])
+
+        # --instance-ids requires --action-state (client-side validation).
+        self.cmd('vmss lifecycle-hook-event update -g {rg} --vmss-name {vmss} --name fakeEvent '
+                 '--instance-ids 0', expect_failure=True)
+
+        # update requires at least one of --action-state or --wait-until (client-side validation).
+        self.cmd('vmss lifecycle-hook-event update -g {rg} --vmss-name {vmss} --name fakeEvent',
+                 expect_failure=True)
+
+
+class VMSSCreateOptions(ScenarioTest):
     @AllowLargeResponse()
     @ResourceGroupPreparer(name_prefix='cli_test_vmss_create_options')
     def test_vmss_create_options(self, resource_group):
@@ -14744,6 +14851,48 @@ class VMSSUpdateZoneAllocationPolicyTest(ScenarioTest):
         ])
 
 
+class VMSSUpdateZonePlacementPolicyTest(ScenarioTest):
+    @ResourceGroupPreparer(name_prefix='cli_test_vmss_update_zone_placement_', location='eastus2')
+    def test_vmss_update_zone_placement_policy(self, resource_group):
+        self.kwargs.update({
+            'vmss_include': 'vmss-update-include-zones',
+            'vmss_exclude': 'vmss-update-exclude-zones',
+            'location': 'eastus2',
+            'image': 'MicrosoftWindowsServer:WindowsServer:2022-datacenter-g2:latest',
+            'admin_username': 'testadmin',
+            'admin_password': 'testPassword0!@#',
+            'vm_sku': 'Standard_D2s_v7'
+        })
+
+        # create a vmss (with no instances so no zones are in use) and update its include zones
+        self.cmd('vmss create -g {rg} -n {vmss_include} -l {location} --image {image} '
+                 '--admin-username {admin_username} --admin-password {admin_password} --upgrade-policy-mode Manual '
+                 '--zone-placement-policy Auto --instance-count 0 --vm-sku {vm_sku} ')
+
+        self.cmd('vmss update -g {rg} -n {vmss_include} --zone-placement-policy Auto --include-zones 1 2')
+
+        self.cmd('vmss show -g {rg} -n {vmss_include}', checks=[
+            self.check('placement.zonePlacementPolicy', 'Auto'),
+            self.check('placement.includeZones', ['1', '2'])
+        ])
+
+        # create a separate vmss (with no instances) and update its exclude zones
+        self.cmd('vmss create -g {rg} -n {vmss_exclude} -l {location} --image {image} '
+                 '--admin-username {admin_username} --admin-password {admin_password} --upgrade-policy-mode Manual '
+                 '--zone-placement-policy Auto --instance-count 0 --vm-sku {vm_sku} ')
+
+        self.cmd('vmss update -g {rg} -n {vmss_exclude} --zone-placement-policy Auto --exclude-zones 1')
+
+        self.cmd('vmss show -g {rg} -n {vmss_exclude}', checks=[
+            self.check('placement.zonePlacementPolicy', 'Auto'),
+            self.check('placement.excludeZones', ['1'])
+        ])
+
+        # --include-zones and --exclude-zones are mutually exclusive
+        with self.assertRaisesRegex(Exception, 'only specify one of --include-zones and --exclude-zones'):
+            self.cmd('vmss update -g {rg} -n {vmss_include} --include-zones 1 2 --exclude-zones 3')
+
+
 class VMZoneMovementScenarioTest(ScenarioTest):
 
     @live_only()
@@ -14799,6 +14948,33 @@ class VMZoneMovementScenarioTest(ScenarioTest):
             self.check('zones[0]', '2'),
             self.check('resiliencyProfile.zoneMovement.isEnabled', True),
         ])
+
+    # Required Microsoft.Compute/ForceDeallocateVMPreview and Microsoft.Compute/VMAvailabilityZoneUpdate to be enabled
+    # to use --zone-movement.
+    @ResourceGroupPreparer(name_prefix='cli_test_vm_zone_movement_preserved_', location='eastus2')
+    def test_vm_zone_movement_preserved(self, resource_group):
+        self.kwargs.update({
+            'vm': self.create_random_name('vm', 15),
+        })
+
+        # Create a VM with zone movement enabled.
+        # --location is passed explicitly so the create validator skips the
+        # subscription-wide Microsoft.Compute/skus listing (a multi-MB response that
+        # would otherwise require @AllowLargeResponse).
+        self.cmd('vm create -g {rg} -n {vm} --image ubuntu2204 --zone 1 --location eastus2 '
+            '--zone-movement true --nsg-rule NONE '
+            '--storage-sku Premium_ZRS --admin-username azureuser --generate-ssh-keys '
+            '--size Standard_D2s_v7',
+        )
+
+        # Update an unrelated field (tag) without --zone-movement;
+        # zone movement should be preserved (regression test for the bug where
+        # zone_movement defaulted to None and overwrote the existing setting)
+        self.cmd('vm update -g {rg} -n {vm} --set tags.foo=bar', checks=[
+            self.check('tags.foo', 'bar'),
+            self.check('resiliencyProfile.zoneMovement.isEnabled', True),
+        ])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -33,7 +33,7 @@ from azure.cli.command_modules.vm._validators import _get_resource_group_from_va
 from azure.cli.core.commands.validators import validate_file_or_dict
 
 from azure.cli.core.commands import LongRunningOperation, DeploymentOutputLongRunningOperation
-from azure.cli.core.commands.client_factory import get_mgmt_service_client
+from azure.cli.core.commands.client_factory import get_mgmt_service_client, get_subscription_id
 from azure.cli.core.profiles import ResourceType
 from azure.cli.core.util import sdk_no_wait
 
@@ -42,7 +42,7 @@ from ._vm_diagnostics_templates import get_default_diag_config
 
 from ._actions import (load_images_from_aliases_doc, load_extension_images_thru_services,
                        load_images_thru_services, _get_latest_image_version_by_aaz)
-from ._client_factory import (_compute_client_factory, cf_vm_image_term)
+from ._client_factory import cf_log_analytics, cf_log_analytics_data_sources, cf_vm_image_term
 
 from .aaz.latest.vm.disk import AttachDetachDataDisk
 from .aaz.latest.vm import Update as UpdateVM
@@ -434,7 +434,6 @@ def create_managed_disk(cmd, resource_group_name, disk_name, location=None,  # p
                         supported_security_option=None):
 
     from azure.mgmt.core.tools import resource_id, is_valid_resource_id
-    from azure.cli.core.commands.client_factory import get_subscription_id
 
     location = location or _get_resource_group_location(cmd.cli_ctx, resource_group_name)
     if security_data_uri:
@@ -731,7 +730,6 @@ def create_snapshot(cmd, resource_group_name, snapshot_name, location=None, size
                     public_network_access=None, accelerated_network=None, architecture=None,
                     elastic_san_resource_id=None, bandwidth_copy_speed=None, instant_access_duration_minutes=None):
     from azure.mgmt.core.tools import resource_id, is_valid_resource_id
-    from azure.cli.core.commands.client_factory import get_subscription_id
 
     location = location or _get_resource_group_location(cmd.cli_ctx, resource_group_name)
     if source_blob_uri:
@@ -890,19 +888,6 @@ def assign_vm_identity(cmd, resource_group_name, vm_name, assign_identity=None, 
 
 
 # region VirtualMachines
-def capture_vm(cmd, resource_group_name, vm_name, vhd_name_prefix,
-               storage_container='vhds', overwrite=True):
-    VirtualMachineCaptureParameters = cmd.get_models('VirtualMachineCaptureParameters')
-    client = _compute_client_factory(cmd.cli_ctx)
-    parameter = VirtualMachineCaptureParameters(vhd_prefix=vhd_name_prefix,
-                                                destination_container_name=storage_container,
-                                                overwrite_vhds=overwrite)
-    poller = client.virtual_machines.begin_capture(resource_group_name, vm_name, parameter)
-    result = LongRunningOperation(cmd.cli_ctx)(poller)
-    output = getattr(result, 'output', None) or result.resources[0]
-    print(json.dumps(output, indent=2))  # pylint: disable=no-member
-
-
 # pylint: disable=too-many-locals, unused-argument, too-many-statements, too-many-branches, broad-except
 def create_vm(cmd, vm_name, resource_group_name, image=None, size='Standard_D2s_v5', location=None, tags=None,
               no_wait=False, authentication_type=None, admin_password=None, computer_name=None,
@@ -943,7 +928,6 @@ def create_vm(cmd, vm_name, resource_group_name, image=None, size='Standard_D2s_
               key_incarnation_id=None, add_proxy_agent_extension=None, disk_iops_read_write=None,
               disk_mbps_read_write=None, zone_movement=None):
 
-    from azure.cli.core.commands.client_factory import get_subscription_id
     from azure.cli.core.util import random_string, hash_string
     from azure.cli.core.commands.arm import ArmTemplateBuilder
     from azure.cli.command_modules.vm._template_builder import (build_vm_resource,
@@ -1326,7 +1310,6 @@ def auto_shutdown_vm(cmd, resource_group_name, vm_name, off=None, email=None, we
                      location=None):
     from ..lab.aaz.latest.lab.global_schedule import Delete as DeleteSchedule, Create as CreateSchedule
     from azure.mgmt.core.tools import resource_id
-    from azure.cli.core.commands.client_factory import get_subscription_id
     subscription_id = get_subscription_id(cmd.cli_ctx)
     name = 'shutdown-computevm-' + vm_name
     vm_id = resource_id(subscription=subscription_id, resource_group=resource_group_name,
@@ -1393,19 +1376,6 @@ def get_vm_by_aaz(cmd, resource_group_name, vm_name, expand=None):
         command_args['expand'] = expand
 
     return VMShow(cli_ctx=cmd.cli_ctx)(command_args=command_args)
-
-
-def get_vm(cmd, resource_group_name, vm_name, expand=None):
-    client = _compute_client_factory(cmd.cli_ctx)
-    return client.virtual_machines.get(resource_group_name, vm_name, expand=expand)
-
-
-def get_vm_to_update(cmd, resource_group_name, vm_name):
-    client = _compute_client_factory(cmd.cli_ctx)
-    vm = client.virtual_machines.get(resource_group_name, vm_name)
-    # To avoid unnecessary permission check of image
-    vm.storage_profile.image_reference = None
-    return vm
 
 
 def get_vm_to_update_by_aaz(cmd, resource_group_name, vm_name):
@@ -1498,7 +1468,6 @@ def list_usage(cmd, location):
 # pylint: disable=redefined-builtin
 def list_vm(cmd, resource_group_name=None, show_details=False, vmss=None):
     from azure.mgmt.core.tools import resource_id, is_valid_resource_id, parse_resource_id
-    from azure.cli.core.commands.client_factory import get_subscription_id
     from .aaz.latest.vm import List as VMList
     if vmss is not None:
         if is_valid_resource_id(vmss):
@@ -1745,20 +1714,6 @@ def stop_vm(cmd, resource_group_name, vm_name, no_wait=False, skip_shutdown=Fals
     return VMStop(cli_ctx=cmd.cli_ctx)(command_args=command_args)
 
 
-def set_vm(cmd, instance, lro_operation=None, no_wait=False):
-    instance.resources = None  # Issue: https://github.com/Azure/autorest/issues/934
-    client = _compute_client_factory(cmd.cli_ctx)
-    parsed_id = _parse_rg_name(instance.id)
-    poller = sdk_no_wait(no_wait, client.virtual_machines.begin_create_or_update,
-                         resource_group_name=parsed_id[0],
-                         vm_name=parsed_id[1],
-                         parameters=instance)
-    if lro_operation:
-        return lro_operation(poller)
-
-    return LongRunningOperation(cmd.cli_ctx)(poller)
-
-
 # Notes: vm format is in snake_case
 def set_vm_by_aaz(cmd, vm, no_wait=False):
     from .aaz.latest.vm import Create as _VMCreate
@@ -1785,19 +1740,6 @@ def set_vm_by_aaz(cmd, vm, no_wait=False):
         SetVM(cli_ctx=cmd.cli_ctx)(command_args=vm))
 
     return vm
-
-
-def patch_vm(cmd, resource_group_name, vm_name, vm):
-    client = _compute_client_factory(cmd.cli_ctx)
-    poller = client.virtual_machines.begin_update(resource_group_name, vm_name, vm)
-    return LongRunningOperation(cmd.cli_ctx)(poller)
-
-
-def patch_disk_encryption_set(cmd, resource_group_name, disk_encryption_set_name, disk_encryption_set_update):
-    client = _compute_client_factory(cmd.cli_ctx)
-    poller = client.disk_encryption_sets.begin_update(resource_group_name, disk_encryption_set_name,
-                                                      disk_encryption_set_update)
-    return LongRunningOperation(cmd.cli_ctx)(poller)
 
 
 def show_vm(cmd, resource_group_name, vm_name, show_details=False, include_user_data=False):
@@ -2681,10 +2623,8 @@ def set_extension(cmd, resource_group_name, vm_name, vm_extension_name, publishe
 
 
 # region VirtualMachines Extension Images
-def list_vm_extension_images(
-        cmd, image_location=None, publisher_name=None, name=None, version=None, latest=False):
-    return load_extension_images_thru_services(
-        cmd.cli_ctx, publisher_name, name, version, image_location, latest)
+def list_vm_extension_images(cmd, image_location=None, publisher_name=None, name=None, version=None, latest=False):
+    return load_extension_images_thru_services(cmd.cli_ctx, publisher_name, name, version, image_location, latest)
 # endregion
 
 
@@ -3797,7 +3737,6 @@ def create_vmss(cmd, vmss_name, resource_group_name, image=None,
                 automatic_zone_balancing_strategy=None, automatic_zone_balancing_behavior=None,
                 enable_automatic_repairs=None, zone_placement_policy=None, include_zones=None,
                 exclude_zones=None, max_zone_count=None, instance_percent_policy=None, max_instance_percent=None):
-    from azure.cli.core.commands.client_factory import get_subscription_id
     from azure.cli.core.util import random_string, hash_string
     from azure.cli.core.commands.arm import ArmTemplateBuilder
     from azure.cli.command_modules.vm._template_builder import (StorageProfile, build_vmss_resource,
@@ -4310,26 +4249,6 @@ def deallocate_vmss(cmd, resource_group_name, vm_scale_set_name, instance_ids=No
     return VmssDeallocate(cli_ctx=cmd.cli_ctx)(command_args=command_args)
 
 
-def get_vmss(cmd, resource_group_name, name, instance_id=None, include_user_data=False):
-    client = _compute_client_factory(cmd.cli_ctx)
-
-    expand = None
-    if include_user_data:
-        expand = 'userData'
-
-    if instance_id is not None:
-        if cmd.supported_api_version(min_api='2020-12-01', operation_group='virtual_machine_scale_sets'):
-            return client.virtual_machine_scale_set_vms.get(resource_group_name=resource_group_name,
-                                                            vm_scale_set_name=name, instance_id=instance_id,
-                                                            expand=expand)
-        return client.virtual_machine_scale_set_vms.get(resource_group_name=resource_group_name,
-                                                        vm_scale_set_name=name, instance_id=instance_id)
-
-    if cmd.supported_api_version(min_api='2021-03-01', operation_group='virtual_machine_scale_sets'):
-        return client.virtual_machine_scale_sets.get(resource_group_name, name, expand=expand)
-    return client.virtual_machine_scale_sets.get(resource_group_name, name)
-
-
 def get_vmss_by_aaz(cmd, resource_group_name, name, instance_id=None, include_user_data=False):
     from .operations.vmss import VMSSShow
     from .operations.vmss_vms import VMSSVMSShow
@@ -4677,7 +4596,8 @@ def update_vmss(cmd, resource_group_name, name, license_type=None, no_wait=False
                 wire_server_access_control_profile_reference_id=None,
                 imds_access_control_profile_reference_id=None, enable_automatic_zone_balancing=None,
                 automatic_zone_balancing_strategy=None, automatic_zone_balancing_behavior=None, max_zone_count=None,
-                instance_percent_policy=None, max_instance_percent=None, **kwargs):
+                instance_percent_policy=None, max_instance_percent=None,
+                zone_placement_policy=None, include_zones=None, exclude_zones=None, **kwargs):
     from .operations.vmss_vms import convert_show_result_to_snake_case as vmss_vms_convert_show_result_to_snake_case
     from .operations.vmss import convert_show_result_to_snake_case as vmss_convert_show_result_to_snake_case
     vmss = kwargs['parameters']
@@ -5169,9 +5089,170 @@ def update_vmss(cmd, resource_group_name, name, license_type=None, no_wait=False
                 vmss["resiliency_policy"]["zone_allocation_policy"]["max_instance_percent_per_zone_policy"][
                     "value"] = max_instance_percent
 
+    if zone_placement_policy is not None or include_zones is not None or exclude_zones is not None:
+        if vmss.get("placement", None) is None:
+            vmss["placement"] = {}
+
+        if zone_placement_policy is not None:
+            vmss["placement"]["zone_placement_policy"] = zone_placement_policy
+
+        if include_zones is not None:
+            vmss["placement"]["include_zones"] = include_zones
+
+        if exclude_zones is not None:
+            vmss["placement"]["exclude_zones"] = exclude_zones
+
     from .operations.vmss import VMSSCreate
     return VMSSCreate(cli_ctx=cmd.cli_ctx)(command_args=vmss)
 
+
+def vmss_lifecycle_hook_list(cmd, resource_group_name, vmss_name):
+    vmss = get_vmss_by_aaz(cmd, resource_group_name, vmss_name)
+    return vmss.get("lifecycleHooksProfile", {}).get("lifecycleHooks", [])
+
+
+def vmss_lifecycle_hook_show(cmd, resource_group_name, vmss_name, type):
+    for hook in vmss_lifecycle_hook_list(cmd, resource_group_name, vmss_name):
+        if hook.get("type") == type:
+            return hook
+
+    raise ResourceNotFoundError(
+        "Lifecycle hook of type '{}' was not found on VMSS '{}'.".format(type, vmss_name))
+
+
+def _commit_vmss_lifecycle_hooks(cmd, resource_group_name, vmss_name, hooks, no_wait):
+    from .operations.vmss import VMSSCreate, convert_show_result_to_snake_case
+    vmss = get_vmss_modified_by_aaz(cmd, resource_group_name, vmss_name)
+    vmss["lifecycleHooksProfile"] = {"lifecycleHooks": hooks}
+    vmss = convert_show_result_to_snake_case(vmss)
+    vmss["resource_group"] = resource_group_name
+    vmss["vm_scale_set_name"] = vmss_name
+    vmss["no_wait"] = no_wait
+    return VMSSCreate(cli_ctx=cmd.cli_ctx)(command_args=vmss)
+
+
+def vmss_lifecycle_hook_add(cmd, resource_group_name, vmss_name, type, wait_duration=None,
+                            default_action=None, no_wait=False):
+    lifecycle_hooks = vmss_lifecycle_hook_list(cmd, resource_group_name, vmss_name)
+
+    for h in lifecycle_hooks:
+        if h.get("type") == type:
+            raise ArgumentUsageError(
+                "A lifecycle hook of type '{}' already exists. Use 'update' to modify it.".format(type))
+
+    hook = {"type": type}
+
+    if wait_duration is not None:
+        hook["waitDuration"] = wait_duration
+
+    if default_action is not None:
+        hook["defaultAction"] = default_action
+
+    lifecycle_hooks.append(hook)
+    return _commit_vmss_lifecycle_hooks(cmd, resource_group_name, vmss_name, lifecycle_hooks, no_wait)
+
+
+def vmss_lifecycle_hook_update(cmd, resource_group_name, vmss_name, type, wait_duration=None,
+                               default_action=None, no_wait=False):
+    lifecycle_hooks = vmss_lifecycle_hook_list(cmd, resource_group_name, vmss_name)
+    target_hook = None
+
+    for h in lifecycle_hooks:
+        if h.get("type") == type:
+            target_hook = h
+
+    if target_hook is None:
+        raise ResourceNotFoundError(
+            "Lifecycle hook of type '{}' was not found on VMSS '{}'.".format(type, vmss_name))
+
+    if wait_duration is not None:
+        target_hook["waitDuration"] = wait_duration
+
+    if default_action is not None:
+        target_hook["defaultAction"] = default_action
+
+    return _commit_vmss_lifecycle_hooks(cmd, resource_group_name, vmss_name, lifecycle_hooks, no_wait)
+
+
+def vmss_lifecycle_hook_remove(cmd, resource_group_name, vmss_name, type=None, remove_all=False,
+                               no_wait=False):
+    if remove_all:
+        return _commit_vmss_lifecycle_hooks(cmd, resource_group_name, vmss_name, [], no_wait)
+
+    lifecycle_hooks = vmss_lifecycle_hook_list(cmd, resource_group_name, vmss_name)
+    target_hook = None
+    hooks = []
+
+    for h in lifecycle_hooks:
+        if h.get("type") == type:
+            target_hook = h
+        else:
+            hooks.append(h)
+
+    if not target_hook:
+        raise ResourceNotFoundError(
+            "Lifecycle hook of type '{}' was not found on VMSS '{}'.".format(type, vmss_name))
+
+    return _commit_vmss_lifecycle_hooks(cmd, resource_group_name, vmss_name, hooks, no_wait)
+
+
+def vmss_lifecycle_hook_event_list(cmd, resource_group_name, vmss_name):
+    from azure.cli.core.commands.transform import unregister_global_transforms
+    from .aaz.latest.vmss.lifecycle_hook_event import List as _lifecycleHookEventList
+    unregister_global_transforms(cmd.cli_ctx)
+    return _lifecycleHookEventList(cli_ctx=cmd.cli_ctx)(command_args={
+        'resource_group': resource_group_name,
+        'vmss_name': vmss_name
+    })
+
+
+def vmss_lifecycle_hook_event_show(cmd, resource_group_name, vmss_name, lifecycle_hook_event_name):
+    from azure.cli.core.commands.transform import unregister_global_transforms
+    from .aaz.latest.vmss.lifecycle_hook_event import Show as _lifecycleHookEventShow
+    unregister_global_transforms(cmd.cli_ctx)
+    return _lifecycleHookEventShow(cli_ctx=cmd.cli_ctx)(command_args={
+        'lifecycle_hook_event_name': lifecycle_hook_event_name,
+        'resource_group': resource_group_name,
+        'vmss_name': vmss_name
+    })
+
+
+def vmss_lifecycle_hook_event_update(cmd, resource_group_name, vmss_name, lifecycle_hook_event_name,
+                                     action_state=None, wait_until=None, target_resource_ids=None, instance_ids=None):
+    from azure.cli.core.commands.transform import unregister_global_transforms
+    from .operations.vmss_lifecycle_hook_event import VMSSLifecycleHookEventUpdate as _lifecycleHookEventUpdate
+    unregister_global_transforms(cmd.cli_ctx)
+
+    command_args = {
+        "lifecycle_hook_event_name": lifecycle_hook_event_name,
+        "resource_group": resource_group_name,
+        "vmss_name": vmss_name,
+    }
+
+    if wait_until is not None:
+        command_args["wait_until"] = wait_until
+
+    if action_state is not None:
+        command_args["target_resources"] = [
+            {"action_state": action_state, "resource": {"id": resource_id}}
+            for resource_id in (target_resource_ids or [])
+        ]
+
+    return _lifecycleHookEventUpdate(cli_ctx=cmd.cli_ctx)(command_args=command_args)
+
+
+def vmss_lifecycle_hook_event_approve(cmd, resource_group_name, vmss_name, lifecycle_hook_event_name,
+                                      target_resource_ids=None, instance_ids=None):
+    return vmss_lifecycle_hook_event_update(cmd, resource_group_name, vmss_name, lifecycle_hook_event_name,
+                                            action_state="Approved", wait_until=None,
+                                            target_resource_ids=target_resource_ids)
+
+
+def vmss_lifecycle_hook_event_reject(cmd, resource_group_name, vmss_name, lifecycle_hook_event_name,
+                                     target_resource_ids=None, instance_ids=None):
+    return vmss_lifecycle_hook_event_update(cmd, resource_group_name, vmss_name, lifecycle_hook_event_name,
+                                            action_state="Rejected", wait_until=None,
+                                            target_resource_ids=target_resource_ids)
 # endregion
 
 
@@ -5395,7 +5476,7 @@ def set_vmss_extension(cmd, resource_group_name, vmss_name, extension_name, publ
         if extensions:
             extension_profile['extensions'] = \
                 [x for x in extensions if
-                 x.get('type_properties_type', '').lower() != extension_name.lower() or
+                 x.get('type', '').lower() != extension_name.lower() or
                  x.get('publisher', '').lower() != publisher.lower()]
 
     ext = {
@@ -5795,7 +5876,6 @@ def create_image_version(cmd, resource_group_name, gallery_name, gallery_image_n
                          allow_replicated_location_deletion=None, block_deletion_before_end_of_life=None,
                          no_wait=False):
     from azure.mgmt.core.tools import resource_id, is_valid_resource_id
-    from azure.cli.core.commands.client_factory import get_subscription_id
 
     location = location or _get_resource_group_location(cmd.cli_ctx, resource_group_name)
     end_of_life_date = fix_gallery_image_date_info(end_of_life_date)
@@ -5825,102 +5905,92 @@ def create_image_version(cmd, resource_group_name, gallery_name, gallery_image_n
 
     if replication_mode is not None:
         profile["replication_mode"] = replication_mode
-    if not cmd.supported_api_version(min_api='2022-03-03', operation_group='gallery_image_versions'):
-        source = {"managed_image": {"id": managed_image}}
-        profile["source"] = source
 
-    if cmd.supported_api_version(min_api='2019-07-01', operation_group='gallery_image_versions'):
-        if managed_image is None and os_snapshot is None and os_vhd_uri is None:
-            raise RequiredArgumentMissingError('usage error: Please provide --managed-image or --os-snapshot or --vhd')
+    if managed_image is None and os_snapshot is None and os_vhd_uri is None:
+        raise RequiredArgumentMissingError('usage error: Please provide --managed-image or --os-snapshot or --vhd')
 
-        source = os_disk_image = data_disk_images = None
-        if virtual_machine is not None and cmd.supported_api_version(min_api='2023-07-03',
-                                                                     operation_group='gallery_image_versions'):
-            source = {"virtual_machine_id": virtual_machine}
-        elif managed_image is not None:
-            source = {"id": managed_image}
-        if os_snapshot is not None:
-            os_disk_image = {"source": {"id": os_snapshot}}
-        if data_snapshot_luns and not data_snapshots:
-            raise ArgumentUsageError('usage error: --data-snapshot-luns must be used together with --data-snapshots')
-        if data_snapshots:
-            if data_snapshot_luns and len(data_snapshots) != len(data_snapshot_luns):
-                raise ArgumentUsageError('usage error: Length of --data-snapshots and '
-                                         '--data-snapshot-luns should be equal.')
-            if not data_snapshot_luns:
-                data_snapshot_luns = list(range(len(data_snapshots)))
-            data_disk_images = []
-            for i, s in enumerate(data_snapshots):
-                data_disk_images.append({"source": {"id": s}, "lun": int(data_snapshot_luns[i])})
-        # from vhd, only support os image now
-        if cmd.supported_api_version(min_api='2020-09-30', operation_group='gallery_image_versions'):
-            # OS disk
-            if os_vhd_uri and os_vhd_storage_account is None or os_vhd_uri is None and os_vhd_storage_account:
-                raise ArgumentUsageError('--os-vhd-uri and --os-vhd-storage-account should be used together.')
-            if os_vhd_uri and os_vhd_storage_account:
-                if not is_valid_resource_id(os_vhd_storage_account):
-                    os_vhd_storage_account = resource_id(
-                        subscription=get_subscription_id(cmd.cli_ctx), resource_group=resource_group_name,
-                        namespace='Microsoft.Storage', type='storageAccounts', name=os_vhd_storage_account)
-                os_disk_image = {
-                    "source": {
-                        "storage_account_id": os_vhd_storage_account,
-                        "uri": os_vhd_uri
-                    }
-                }
-
-            # Data disks
-            if data_vhds_uris and data_vhds_storage_accounts is None or \
-                    data_vhds_uris is None and data_vhds_storage_accounts:
-                raise ArgumentUsageError('--data-vhds-uris and --data-vhds-storage-accounts should be used together.')
-            if data_vhds_luns and data_vhds_uris is None:
-                raise ArgumentUsageError('--data-vhds-luns must be used together with --data-vhds-uris')
-            if data_vhds_uris:
-                # Generate LUNs
-                if data_vhds_luns is None:
-                    # 0, 1, 2, ...
-                    data_vhds_luns = list(range(len(data_vhds_uris)))
-                # Check length
-                len_data_vhds_uris = len(data_vhds_uris)
-                len_data_vhds_luns = len(data_vhds_luns)
-                len_data_vhds_storage_accounts = len(data_vhds_storage_accounts)
-                if len_data_vhds_uris != len_data_vhds_luns or len_data_vhds_uris != len_data_vhds_storage_accounts:
-                    raise ArgumentUsageError(
-                        'Length of --data-vhds-uris, --data-vhds-luns, --data-vhds-storage-accounts must be same.')
-                # Generate full storage account ID
-                for i, storage_account in enumerate(data_vhds_storage_accounts):
-                    if not is_valid_resource_id(storage_account):
-                        data_vhds_storage_accounts[i] = resource_id(
-                            subscription=get_subscription_id(cmd.cli_ctx), resource_group=resource_group_name,
-                            namespace='Microsoft.Storage', type='storageAccounts', name=storage_account)
-                if data_disk_images is None:
-                    data_disk_images = []
-                for uri, lun, account in zip(data_vhds_uris, data_vhds_luns, data_vhds_storage_accounts):
-                    data_disk_images.append({
-                        "source": {"storage_account_id": account, "uri": uri},
-                        "lun": lun
-                    })
-
-        storage_profile = {"source": source, "os_disk_image": os_disk_image, "data_disk_images": data_disk_images}
-        args = {
-            "publishing_profile": profile,
-            "location": location,
-            "tags": tags or {},
-            "storage_profile": storage_profile
-        }
-        if allow_replicated_location_deletion is not None:
-            args["safety_profile"] = {
-                "allow_deletion_of_replicated_locations": allow_replicated_location_deletion
+    source = os_disk_image = data_disk_images = None
+    if virtual_machine is not None:
+        source = {"virtual_machine_id": virtual_machine}
+    elif managed_image is not None:
+        source = {"id": managed_image}
+    if os_snapshot is not None:
+        os_disk_image = {"source": {"id": os_snapshot}}
+    if data_snapshot_luns and not data_snapshots:
+        raise ArgumentUsageError('usage error: --data-snapshot-luns must be used together with --data-snapshots')
+    if data_snapshots:
+        if data_snapshot_luns and len(data_snapshots) != len(data_snapshot_luns):
+            raise ArgumentUsageError('usage error: Length of --data-snapshots and '
+                                     '--data-snapshot-luns should be equal.')
+        if not data_snapshot_luns:
+            data_snapshot_luns = list(range(len(data_snapshots)))
+        data_disk_images = []
+        for i, s in enumerate(data_snapshots):
+            data_disk_images.append({"source": {"id": s}, "lun": int(data_snapshot_luns[i])})
+    # from vhd, only support os image now
+    # OS disk
+    if os_vhd_uri and os_vhd_storage_account is None or os_vhd_uri is None and os_vhd_storage_account:
+        raise ArgumentUsageError('--os-vhd-uri and --os-vhd-storage-account should be used together.')
+    if os_vhd_uri and os_vhd_storage_account:
+        if not is_valid_resource_id(os_vhd_storage_account):
+            os_vhd_storage_account = resource_id(
+                subscription=get_subscription_id(cmd.cli_ctx), resource_group=resource_group_name,
+                namespace='Microsoft.Storage', type='storageAccounts', name=os_vhd_storage_account)
+        os_disk_image = {
+            "source": {
+                "storage_account_id": os_vhd_storage_account,
+                "uri": os_vhd_uri
             }
-        if block_deletion_before_end_of_life is not None:
-            if "safety_profile" not in args:
-                args["safety_profile"] = {}
+        }
 
-            args["safety_profile"]["block_deletion_before_end_of_life"] = block_deletion_before_end_of_life
-    else:
-        if managed_image is None:
-            raise RequiredArgumentMissingError('usage error: Please provide --managed-image')
-        args = {"publishing_profile": profile, "location": location, "tags": tags or {}}
+    # Data disks
+    if data_vhds_uris and data_vhds_storage_accounts is None or \
+            data_vhds_uris is None and data_vhds_storage_accounts:
+        raise ArgumentUsageError('--data-vhds-uris and --data-vhds-storage-accounts should be used together.')
+    if data_vhds_luns and data_vhds_uris is None:
+        raise ArgumentUsageError('--data-vhds-luns must be used together with --data-vhds-uris')
+    if data_vhds_uris:
+        # Generate LUNs
+        if data_vhds_luns is None:
+            # 0, 1, 2, ...
+            data_vhds_luns = list(range(len(data_vhds_uris)))
+        # Check length
+        len_data_vhds_uris = len(data_vhds_uris)
+        len_data_vhds_luns = len(data_vhds_luns)
+        len_data_vhds_storage_accounts = len(data_vhds_storage_accounts)
+        if len_data_vhds_uris != len_data_vhds_luns or len_data_vhds_uris != len_data_vhds_storage_accounts:
+            raise ArgumentUsageError(
+                'Length of --data-vhds-uris, --data-vhds-luns, --data-vhds-storage-accounts must be same.')
+        # Generate full storage account ID
+        for i, storage_account in enumerate(data_vhds_storage_accounts):
+            if not is_valid_resource_id(storage_account):
+                data_vhds_storage_accounts[i] = resource_id(
+                    subscription=get_subscription_id(cmd.cli_ctx), resource_group=resource_group_name,
+                    namespace='Microsoft.Storage', type='storageAccounts', name=storage_account)
+        if data_disk_images is None:
+            data_disk_images = []
+        for uri, lun, account in zip(data_vhds_uris, data_vhds_luns, data_vhds_storage_accounts):
+            data_disk_images.append({
+                "source": {"storage_account_id": account, "uri": uri},
+                "lun": lun
+            })
+
+    storage_profile = {"source": source, "os_disk_image": os_disk_image, "data_disk_images": data_disk_images}
+    args = {
+        "publishing_profile": profile,
+        "location": location,
+        "tags": tags or {},
+        "storage_profile": storage_profile
+    }
+    if allow_replicated_location_deletion is not None:
+        args["safety_profile"] = {
+            "allow_deletion_of_replicated_locations": allow_replicated_location_deletion
+        }
+    if block_deletion_before_end_of_life is not None:
+        if "safety_profile" not in args:
+            args["safety_profile"] = {}
+
+        args["safety_profile"]["block_deletion_before_end_of_life"] = block_deletion_before_end_of_life
 
     args["resource_group"] = resource_group_name
     args["gallery_name"] = gallery_name
@@ -5972,7 +6042,7 @@ def undelete_image_version(cmd, resource_group_name, gallery_name, gallery_image
 
 
 def fix_gallery_image_date_info(date_info):
-    # here we add needed time, if only date is provided, so the setting can be accepted by servie end
+    # here we add needed time, if only date is provided, so the setting can be accepted by service end
     if date_info and 't' not in date_info.lower():
         date_info += 'T12:59:59Z'
     return date_info
@@ -6136,8 +6206,6 @@ def update_dedicated_host(cmd, host_group_name, host_name, resource_group_name, 
 
 # region VMMonitor
 def _get_log_analytics_client(cmd):
-    from ._client_factory import cf_log_analytics
-    from azure.cli.core.commands.client_factory import get_subscription_id
     subscription_id = get_subscription_id(cmd.cli_ctx)
     return cf_log_analytics(cmd.cli_ctx, subscription_id)
 
@@ -6173,8 +6241,6 @@ def _prepare_workspace(cmd, resource_group_name, workspace):
 
 
 def _set_data_source_for_workspace(cmd, os_type, resource_group_name, workspace_name):
-    from ._client_factory import cf_log_analytics_data_sources
-    from azure.cli.core.commands.client_factory import get_subscription_id
     from azure.mgmt.loganalytics.models import DataSource
     from azure.core.exceptions import HttpResponseError
 
@@ -6546,11 +6612,11 @@ def set_vmss_applications(cmd, vmss_name, resource_group_name, application_versi
             args.no_wait = no_wait
 
         def pre_instance_update(self, instance):
-            instance.properties.virtualMachineProfile.application_profile.gallery_applications = [{"package_reference_id": avid} for avid in application_version_ids]
+            instance.properties.virtual_machine_profile.application_profile.gallery_applications = [{"package_reference_id": avid} for avid in application_version_ids]
 
             if order_applications:
                 index = 1
-                for app in instance.properties.virtualMachineProfile.application_profile.gallery_applications:
+                for app in instance.properties.virtual_machine_profile.application_profile.gallery_applications:
                     app["order"] = index
                     index += 1
 
@@ -6580,7 +6646,6 @@ def set_vmss_applications(cmd, vmss_name, resource_group_name, application_versi
 
             # Resolve flatten conflict
             # When the type field conflicts, the type in inner layer is ignored and the outer layer is applied
-            print(self.ctx.vars.instance.properties.virtual_machine_profile.extension_profile.extensions)
             if has_value(self.ctx.vars.instance.properties.virtual_machine_profile.extension_profile.extensions):
                 for extension in self.ctx.vars.instance.properties.virtual_machine_profile.extension_profile.extensions:
                     if has_value(extension.type):
@@ -6871,4 +6936,8 @@ def list_vm_sizes(cmd, location):
     })
 
 
+def get_vm(cmd, resource_group_name, vm_name, expand=None):
+    from ._client_factory import _compute_client_factory
+    client = _compute_client_factory(cmd.cli_ctx)
+    return client.virtual_machines.get(resource_group_name, vm_name, expand=expand)
 # endRegion
